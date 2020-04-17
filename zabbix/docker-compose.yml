@@ -1,0 +1,111 @@
+version: '3.5'
+services:
+    # Service name (mariadb) can be used as a hostname for communicating between containers.
+    # We can also use container names for this purpose (zbx_mariadb).
+    mariadb:
+        container_name: zbx_mariadb
+        image: mariadb
+        # Deploy only takes effect in docker swarm
+        # deploy:
+          # resources:
+            # limits:
+              # cpus: '0.50'
+              # memory: 50M
+        env_file:
+          - env_mariadb
+        environment:
+          # This is one way of passing environment variables
+          # Check other services for more
+          - MYSQL_DATABASE=zabbix
+        secrets:
+          - MYSQL_USER
+          - MYSQL_PASSWORD
+          - MYSQL_ROOT_PASSWORD
+        # Restart the service if anything fails unless we stopped it from command line
+        restart: unless-stopped
+        volumes:
+          - zbx_srv_db:/var/lib/mysql
+        networks:
+          zbx_net:
+        # Overwrite default cmd so databases are utf8
+        # https://github.com/zabbix/zabbix-docker/blob/4.4/docker-compose_v3_ubuntu_mysql_local.yaml
+        command: [mysqld, --character-set-server=utf8, --collation-server=utf8_bin, --default-authentication-plugin=mysql_native_password]
+
+
+    zabbix-server:
+        container_name: zbx_srv
+        image: zabbix/zabbix-server-mysql
+        depends_on:
+          - mariadb
+        environment:
+          # Here is another way to pass env variables
+          DB_SERVER_HOST: mariadb # Can be container or service name or even aliases
+          MYSQL_USER_FILE: '/run/secrets/MYSQL_USER'
+          MYSQL_PASSWORD_FILE: '/run/secrets/MYSQL_PASSWORD'
+        secrets:
+          - MYSQL_USER
+          - MYSQL_PASSWORD
+        volumes:
+          # I got it from inspecting image and here:
+          # https://github.com/zabbix/zabbix-docker/blob/4.4/docker-compose_v3_ubuntu_mysql_local.yaml
+          - /etc/localtime:/etc/localtime:ro
+          - /etc/timezone:/etc/timezone:ro
+          - ./zbx_env/usr/lib/zabbix/alertscripts:/usr/lib/zabbix/alertscripts:ro
+          - ./zbx_env/usr/lib/zabbix/externalscripts:/usr/lib/zabbix/externalscripts:ro
+          - ./zbx_env/var/lib/zabbix/export:/var/lib/zabbix/export:rw
+          - ./zbx_env/var/lib/zabbix/modules:/var/lib/zabbix/modules:ro
+          - ./zbx_env/var/lib/zabbix/enc:/var/lib/zabbix/enc:ro
+          - ./zbx_env/var/lib/zabbix/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+          - ./zbx_env/var/lib/zabbix/mibs:/var/lib/zabbix/mibs:ro
+          - ./zbx_env/var/lib/zabbix/snmptraps:/var/lib/zabbix/snmptraps:ro
+          - ./zbx_env/var/lib/zabbix/ssl/certs:/var/lib/zabbix/ssl/certs:ro
+          - ./zbx_env/var/lib/zabbix/ssl/keys:/var/lib/zabbix/ssl/keys:ro
+          - ./zbx_env/var/lib/zabbix/ssl/ssl_ca:/var/lib/zabbix/ssl/ssl_ca:ro
+        networks:
+          zbx_net:
+
+
+    zabbix-web-ui:
+        container_name: zbx_ui
+        image: zabbix/zabbix-web-apache-mysql
+        depends_on:
+          - mariadb
+          - zabbix-server
+        environment:
+          DB_SERVER_HOST: zbx_mariadb # container name
+          ZBX_SERVER_HOST: zabbix-server # service name
+        env_file:
+          - ./env_mariadb
+        secrets:
+          - MYSQL_USER
+          - MYSQL_PASSWORD
+        volumes:
+          - ./zbx_env/etc/ssl/apache2:/etc/ssl/apache2
+        networks:
+          zbx_net:
+        ports:
+          - '127.0.0.1:8080:80'
+
+
+networks:
+  zbx_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.20.0.0/24
+
+
+volumes:
+  zbx_srv_db:
+
+
+secrets:
+  MYSQL_USER:
+    file: ./MYSQL_USER
+  MYSQL_PASSWORD:
+    file: ./MYSQL_PASSWORD
+  MYSQL_ROOT_PASSWORD:
+    file: ./MYSQL_ROOT_PASSWORD
